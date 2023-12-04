@@ -15,7 +15,6 @@ Simulates the actions the script would take without making any actual changes.
 Balint Oberrauch
 https://oberrauch.bz.it
 
-
 .VERSION HISTORY
 1.0 - [02.12.2023] - Initial version
 1.1 - [02.12.2023] - Added WhatIf and Verbose support
