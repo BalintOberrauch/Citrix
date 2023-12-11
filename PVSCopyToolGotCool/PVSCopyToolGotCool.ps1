@@ -19,6 +19,7 @@ https://oberrauch.bz.it
 1.0 - [02.12.2023] - Initial version
 1.1 - [02.12.2023] - Added WhatIf and Verbose support
 1.2 - [02.12.2023] - Enhanced file copy functionality and verbose output
+1.4 - [11.12.2023] - Improved copy speed, added error handling and different input switch ("y" or "yes")
 
 .NOTES
 Additional information about the script.
@@ -57,29 +58,46 @@ function Copy-FileWithProgress {
         [string]$DestinationPath
     )
 
-    $fileSize = (Get-Item $SourcePath).Length
-    $totalBytesCopied = 0
-    $bufferSize = 81920
-    $buffer = New-Object byte[] $bufferSize
-    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $fileSize = (Get-Item $SourcePath).Length
+        $totalBytesCopied = 0
+        $bufferSize = if ($fileSize -lt 1MB) { 64KB } else { 10MB } # Dynamic buffer for PVP and (A)VHDX files. Assign more Buffer for AVHDX Files if you have enough memory.
+        $buffer = New-Object byte[] $bufferSize
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $sourceStream = [System.IO.File]::OpenRead($SourcePath)
-    $destinationStream = [System.IO.File]::Create($DestinationPath)
+        $sourceStream = [System.IO.File]::OpenRead($SourcePath)
+        $destinationStream = [System.IO.File]::Create($DestinationPath)
 
-    while ($true) {
-        $read = $sourceStream.Read($buffer, 0, $bufferSize)
-        if ($read -le 0) { break }
-        $destinationStream.Write($buffer, 0, $read)
-        $totalBytesCopied += $read
-        $percentage = ($totalBytesCopied / $fileSize) * 100
-        Write-Progress -Activity "Copying file ($($SourcePath))" -Status "$percentage% Complete" -PercentComplete $percentage
+        $lastUpdateTime = [System.Diagnostics.Stopwatch]::StartNew()
+        $updateInterval = 1  # Update progress every seconds
+
+        while ($true) {
+            $read = $sourceStream.Read($buffer, 0, $bufferSize)
+            if ($read -le 0) { break }
+            $destinationStream.Write($buffer, 0, $read)
+            $totalBytesCopied += $read
+
+            if ($lastUpdateTime.Elapsed.TotalSeconds -ge $updateInterval) {
+                $percentage = [math]::Round(($totalBytesCopied / $fileSize) * 100)
+                Write-Progress -Activity "Copying file ($($SourcePath))" -Status "$percentage% Complete" -PercentComplete $percentage
+                $lastUpdateTime.Restart()
+            }
+        }
+    } catch {
+        Write-Error "An error occurred during file copy: $_"
+    } finally {
+        if ($sourceStream) {
+            $sourceStream.Close()
+        }
+        if ($destinationStream) {
+            $destinationStream.Close()
+        }
+        $stopwatch.Stop()
     }
 
-    if ($PSCmdlet.ShouldProcess($DestinationPath, "Copy file")) {
-        $sourceStream.Close()
-        $destinationStream.Close()
-        $stopwatch.Stop()
+    Write-Progress -Activity "Copying file ($($SourcePath))" -Completed
 
+    if ($PSCmdlet.ShouldProcess($DestinationPath, "Copy file")) {
         Write-Verbose "File copied: $DestinationPath"
 
         return @{
