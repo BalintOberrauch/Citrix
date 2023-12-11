@@ -197,7 +197,7 @@ foreach ($vDisk in $vDiskDetails) {
 
 if ($missingFiles.Count -gt 0) {
     $response = Read-Host "Would you like to copy the missing files from another location? (yes/no)"
-    if ($response -eq "yes") {
+    if ($response -in @("yes", "y")) {
         foreach ($fileDetail in $missingFileDetails) {
             $sourceServer = $serverDetails | Where-Object {
                 Test-Path (Join-Path -Path $_.StorePath -ChildPath ($fileDetail.FilePath | Split-Path -Leaf))
