@@ -136,3 +136,7 @@ Set-VIRole -Role $Role -AddPrivilege ($AllPrivilegeID) -Verbose
 
 # Display the privileges assigned for verification
 Get-VIPrivilege -Role $Role
+
+#Disconnect from vCenter
+
+Disconnect-VIServer -Confirm
