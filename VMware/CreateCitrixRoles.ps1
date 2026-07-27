@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-This script connects to a VMware vSphere server and configures a custom role with specific privileges necessary for Citrix Machine Creation Services (MCS), including permissions for machine provisioning, storage management, and deletion of provisioned machines.
+This script connects to a VMware vSphere server and configures a custom role with specific privileges necessary for Citrix Machine Creation Services (MCS), including permissions for machine provisioning, storage management, image sharing, tagging, and deletion of provisioned machines.
 
 .DESCRIPTION
 The script performs the following actions:
@@ -10,12 +10,22 @@ The script performs the following actions:
 - Prompts the user to select the specific privilege sets they wish to combine and assign to the "CitrixRole" role.
 - Offers the user an option to disconnect from the vSphere server at the end of the script.
 
-This script ensures that the "CitrixRole" role has the necessary permissions to perform comprehensive Citrix MCS operations on a VMware vSphere environment.
+This script ensures that the "CitrixRole" role has the necessary permissions to perform comprehensive Citrix MCS operations on a VMware vSphere environment, aligned with the Citrix DaaS "Connection to VMware" documentation (Required permissions section).
 
 .NOTES
 Author: Balint Oberrauch
 Date: 04/11/2024
-Version: 1.4
+Updated: 07/27/2026
+Version: 1.5
+
+Changes in 1.5:
+- Added missing "VirtualMachine.Config.Rename" privilege to MachineCreationServices set
+  (per current Citrix docs, required for "Provision machines (Machine Creation Services)").
+- Added new "SharePreparedImages" privilege set for sharing prepared images across hosting connections.
+- Added new "TagsAndCustomAttributes" privilege set for vSphere Tagging / Custom Attributes support.
+- Added reminder notes for permissions that must be applied WITHOUT "Propagate to Children"
+  at the Root vCenter Server level (StorageProfile.* and InventoryService.Tagging.AttachTag).
+
 Prerequisites:
 - VMware PowerCLI module installed and imported.
 - Appropriate permissions to connect to the vSphere server and manage roles.
@@ -33,6 +43,7 @@ Connect-VIServer -Server $vCenterServer
 # Check if the role "CitrixRole" already exists
 $RoleName = "CitrixRole"
 $Role = Get-VIRole -Name $RoleName -ErrorAction SilentlyContinue
+
 if (-not $Role) {
     Write-Verbose "Creating new role '$RoleName' on server '$vCenterServer'."
     try {
@@ -47,6 +58,7 @@ if (-not $Role) {
 
 # Define privilege sets
 $Privileges = @{
+
     # Basic Connection and Resource Permissions
     "AddConnectionsAndResources" = @(
         "System.Anonymous",
@@ -72,12 +84,13 @@ $Privileges = @{
         "Resource.AssignVMToPool",
         "VirtualMachine.Config.AddExistingDisk",
         "VirtualMachine.Config.AddNewDisk",
-        "VirtualMachine.Config.AddRemoveDevice"
+        "VirtualMachine.Config.AddRemoveDevice",
         "VirtualMachine.Config.AdvancedConfig",
         "VirtualMachine.Config.RemoveDisk",
         "VirtualMachine.Config.CPUCount",
         "VirtualMachine.Config.Memory",
         "VirtualMachine.Config.Settings",
+        "VirtualMachine.Config.Rename",
         "VirtualMachine.Interact.PowerOff",
         "VirtualMachine.Interact.PowerOn",
         "VirtualMachine.Interact.Reset",
@@ -131,7 +144,9 @@ $Privileges = @{
     )
 
     # Provisioning Services Privileges
-    # The VApp.Export is required for creating MCS machine catalogs using machine profile. This is mandatory for W11.
+    # NOTE: Per Citrix docs, this set must be combined with "MachineCreationServices" -
+    # select both when prompted. VApp.Export is required for creating MCS machine
+    # catalogs using a machine profile (mandatory for Windows 11).
     "ProvisioningServices" = @(
         "VirtualMachine.Config.AddRemoveDevice",
         "VirtualMachine.Config.CPUCount",
@@ -143,9 +158,46 @@ $Privileges = @{
     )
 
     # Storage Profile Management Privileges
+    # NOTE: Apply these permissions at the Root vCenter Server level, WITHOUT
+    # "Propagate to Children", when assigning the role to a user.
     "StorageProfile" = @(
         "StorageProfile.Update",
         "StorageProfile.View"
+    )
+
+    # Share Prepared Images Privileges
+    # Required on the TARGET hosting connection when sharing prepared images
+    # (master/golden images) across different hosting connections.
+    "SharePreparedImages" = @(
+        "Datastore.AllocateSpace",
+        "Network.Assign",
+        "Resource.AssignVMToPool",
+        "VirtualMachine.Config.AddRemoveDevice",
+        "VirtualMachine.Config.RemoveDisk",
+        "VirtualMachine.Config.Settings",
+        "VirtualMachine.Inventory.Register",
+        "VirtualMachine.Inventory.Delete",
+        "VirtualMachine.Provisioning.MarkAsTemplate",
+        "VirtualMachine.Provisioning.MarkAsVM",
+        "Host.Config.Network"
+    )
+
+    # Tags and Custom Attributes Privileges
+    # Required to create, edit, assign, and delete tags/categories and custom
+    # attributes used by MCS to differentiate master images from provisioned VMs.
+    # NOTE: Apply "InventoryService.Tagging.AttachTag" at the Root vCenter Server
+    # level, WITHOUT "Propagate to Children", when assigning the role to a user.
+    "TagsAndCustomAttributes" = @(
+        "InventoryService.Tagging.CreateTag",
+        "InventoryService.Tagging.CreateCategory",
+        "InventoryService.Tagging.EditTag",
+        "InventoryService.Tagging.EditCategory",
+        "InventoryService.Tagging.DeleteTag",
+        "InventoryService.Tagging.DeleteCategory",
+        "InventoryService.Tagging.AttachTag",
+        "InventoryService.Tagging.ObjectAttachable",
+        "Global.ManageCustomFields",
+        "Global.SetCustomField"
     )
 }
 
@@ -156,6 +208,7 @@ $Privileges.Keys | ForEach-Object { Write-Host "$index. $_"; $index++ }
 
 # Prompt user to select privilege sets to combine
 $selectedIndices = Read-Host -Prompt "Enter the numbers of the privilege sets you want to assign, separated by commas (e.g., 1,3,5)"
+
 if (-not $selectedIndices) {
     Write-Error "No privilege sets selected. Exiting script."
     return
@@ -193,6 +246,19 @@ try {
     Get-VIPrivilege -Role $Role | Format-Table -Property Name
 } catch {
     Write-Error "Failed to retrieve privileges for role '$RoleName'. Error: $_"
+}
+
+# Reminder about permissions requiring special assignment scope
+if ($selectedPrivilegeSets -contains "StorageProfile" -or $selectedPrivilegeSets -contains "TagsAndCustomAttributes") {
+    Write-Host ""
+    Write-Host "IMPORTANT: When assigning this role to a user/group, remember:" -ForegroundColor Yellow
+    if ($selectedPrivilegeSets -contains "StorageProfile") {
+        Write-Host " - StorageProfile.Update / StorageProfile.View must be applied at the Root vCenter Server level, WITHOUT 'Propagate to Children'." -ForegroundColor Yellow
+    }
+    if ($selectedPrivilegeSets -contains "TagsAndCustomAttributes") {
+        Write-Host " - InventoryService.Tagging.AttachTag must be applied at the Root vCenter Server level, WITHOUT 'Propagate to Children'." -ForegroundColor Yellow
+    }
+    Write-Host " - All other permissions should be applied at the data center level (minimum), WITH 'Propagate to Children'." -ForegroundColor Yellow
 }
 
 # Prompt user to disconnect from vCenter
